@@ -2,7 +2,7 @@ import axios from "axios";
 import https from "https";
 import FormData from "form-data";
 import crypto from "crypto";
-import mongoose from "mongoose";
+import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
 // KONFIGURASI
@@ -40,36 +40,11 @@ const SpoofHead = (extra = {}) => {
 };
 
 // ============================================================
-// SETUP MONGODB
+// SETUP SUPABASE
 // ============================================================
-// Pastikan kamu sudah mengisi MONGODB_URI di Environment Variables Hostless
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/domoai";
-
-const accountSchema = new mongoose.Schema({
-  email: { type: String, required: true },
-  password: { type: String, required: true },
-  username: String,
-  userId: Number,
-  state: { type: String, required: true },
-  usageCount: { type: Number, default: 0 },
-  lastKnownCredits: { type: Number, default: 0 },
-  createdAt: { type: String, default: () => new Date().toISOString() }
-});
-
-// Cegah error OverwriteModelError di lingkungan serverless
-const Account = mongoose.models.Account || mongoose.model("Account", accountSchema);
-
-let isConnected = false;
-async function connectDB() {
-  if (isConnected) return;
-  try {
-    await mongoose.connect(MONGODB_URI);
-    isConnected = true;
-    console.log("[DB] ✅ Terhubung ke MongoDB");
-  } catch (err) {
-    console.error("[DB] ❌ Gagal koneksi MongoDB:", err.message);
-  }
-}
+const supabaseUrl = process.env.SUPABASE_URL || "https://xxxxxx.supabase.co";
+const supabaseKey = process.env.SUPABASE_KEY || "eyJhbGciOi...";
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ============================================================
 // TEMPMAIL
@@ -448,12 +423,24 @@ class LightPdf {
 }
 
 // ============================================================
-// STORAGE & FUNGSI UTAMA (MONGODB)
+// STORAGE & FUNGSI UTAMA (SUPABASE)
 // ============================================================
 async function loadAccounts() {
-  await connectDB();
   try {
-    return await Account.find().lean();
+    const { data, error } = await supabase.from('domoai_accounts').select('*');
+    if (error) throw error;
+    
+    // Map dari snake_case database ke camelCase JavaScript
+    return data.map(row => ({
+      email: row.email,
+      password: row.password,
+      username: row.username,
+      userId: row.user_id,
+      state: row.state,
+      usageCount: row.usage_count,
+      lastKnownCredits: row.last_known_credits,
+      createdAt: row.created_at
+    }));
   } catch (e) {
     console.error("[DB] Gagal load akun:", e.message);
     return [];
@@ -461,12 +448,24 @@ async function loadAccounts() {
 }
 
 async function saveAccounts(accounts) {
-  await connectDB();
   try {
-    // Hapus semua data lama lalu simpan data terbaru (sinkronisasi array)
-    await Account.deleteMany({});
+    // Hapus semua data lama
+    await supabase.from('domoai_accounts').delete().neq('email', 'dummy_value_to_delete_all');
+    
+    // Insert data baru
     if (accounts.length > 0) {
-      await Account.insertMany(accounts);
+      const insertData = accounts.map(a => ({
+        email: a.email,
+        password: a.password,
+        username: a.username,
+        user_id: a.userId,
+        state: a.state,
+        usage_count: a.usageCount,
+        last_known_credits: a.lastKnownCredits,
+        created_at: a.createdAt || new Date().toISOString()
+      }));
+      const { error } = await supabase.from('domoai_accounts').insert(insertData);
+      if (error) throw error;
     }
   } catch (e) {
     console.error("[DB] Gagal simpan akun:", e.message);
