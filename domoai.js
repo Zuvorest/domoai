@@ -453,7 +453,6 @@ async function loadAccounts() {
 
 async function saveAccounts(accounts) {
   try {
-    // Hapus semua data lama (sinkronisasi array)
     await supabase.from('domoai_accounts').delete().neq('email', 'dummy_value_to_delete_all');
     
     if (accounts.length > 0) {
@@ -515,7 +514,7 @@ async function ensureReadyAccount() {
   const accounts = await loadAccounts();
   
   for (const acc of accounts) {
-    if (!acc || !acc.state) continue; // Pengaman data korup
+    if (!acc || !acc.state) continue;
     const domo = new DomoAIClient();
     domo.decodeState(acc.state);
     if (!domo.token) continue;
@@ -541,11 +540,20 @@ async function ensureReadyAccount() {
   const reg = await registerOneAccount();
   if (!reg.success) throw new Error("Auto-register gagal");
   
-  // Langsung gunakan akun baru dari memori
   return reg.account; 
 }
 
-async function generateFull({ mode = "t2i", images, prompt, modelVersion, modelName, resolution = CONFIG.DEFAULT_RESOLUTION, aspectRatio, removeWatermark = CONFIG.REMOVE_WM_DEFAULT, wmMode = CONFIG.WM_MODE }) {
+async function generateFull({ 
+  mode = "t2i", 
+  images, 
+  prompt, 
+  modelVersion = CONFIG.MODEL_VERSION_NANO_BANANA, // Default 22006
+  modelName = "Nano Banana 2.1",                    // Default nama
+  resolution = CONFIG.DEFAULT_RESOLUTION, 
+  aspectRatio, 
+  removeWatermark = CONFIG.REMOVE_WM_DEFAULT, 
+  wmMode = CONFIG.WM_MODE 
+}) {
   const acc = await ensureReadyAccount();
   const domo = new DomoAIClient();
   domo.decodeState(acc.state);

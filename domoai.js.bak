@@ -42,9 +42,14 @@ const SpoofHead = (extra = {}) => {
 // ============================================================
 // SETUP SUPABASE
 // ============================================================
-const supabaseUrl = process.env.SUPABASE_URL || "https://xxxxxx.supabase.co";
-const supabaseKey = process.env.SUPABASE_KEY || "eyJhbGciOi...";
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.warn("⚠️ Peringatan: SUPABASE_URL atau SUPABASE_KEY belum diisi di Environment Variables!");
+}
+
+const supabase = createClient(supabaseUrl || "https://dummy.supabase.co", supabaseKey || "dummy_key");
 
 // ============================================================
 // TEMPMAIL
@@ -430,7 +435,6 @@ async function loadAccounts() {
     const { data, error } = await supabase.from('domoai_accounts').select('*');
     if (error) throw error;
     
-    // Map dari snake_case database ke camelCase JavaScript
     return data.map(row => ({
       email: row.email,
       password: row.password,
@@ -449,10 +453,9 @@ async function loadAccounts() {
 
 async function saveAccounts(accounts) {
   try {
-    // Hapus semua data lama
+    // Hapus semua data lama (sinkronisasi array)
     await supabase.from('domoai_accounts').delete().neq('email', 'dummy_value_to_delete_all');
     
-    // Insert data baru
     if (accounts.length > 0) {
       const insertData = accounts.map(a => ({
         email: a.email,
@@ -489,8 +492,7 @@ async function registerOneAccount() {
   let credits = CONFIG.INITIAL_CREDITS;
   try { credits = await domo.getCredits(); } catch {}
 
-  const accounts = await loadAccounts();
-  accounts.push({ 
+  const newAcc = { 
     email, 
     password, 
     username: domo.username, 
@@ -499,28 +501,36 @@ async function registerOneAccount() {
     usageCount: 0, 
     lastKnownCredits: credits, 
     createdAt: new Date().toISOString() 
-  });
-  
+  };
+
+  const accounts = await loadAccounts();
+  accounts.push(newAcc);
   await saveAccounts(accounts);
+  
   console.log(`[DOMO] ✅ Akun tersimpan di DB. Total: ${accounts.length}\n`);
-  return { success: true, email, username: domo.username, credits };
+  return { success: true, account: newAcc }; 
 }
 
 async function ensureReadyAccount() {
   const accounts = await loadAccounts();
+  
   for (const acc of accounts) {
+    if (!acc || !acc.state) continue; // Pengaman data korup
     const domo = new DomoAIClient();
     domo.decodeState(acc.state);
     if (!domo.token) continue;
+    
     try {
       const credits = await domo.getCredits();
       if (credits >= CONFIG.CREDITS_PER_GENERATE) return acc;
       else {
+        console.log(`[DOMO] Akun ${acc.email} kredit habis. Menghapus...`);
         const filtered = accounts.filter((a) => a.email !== acc.email);
         await saveAccounts(filtered);
       }
     } catch (e) {
       if ([401, 403].includes(e.response?.status)) {
+        console.log(`[DOMO] Akun ${acc.email} token invalid. Menghapus...`);
         const filtered = accounts.filter((a) => a.email !== acc.email);
         await saveAccounts(filtered);
       }
@@ -530,8 +540,9 @@ async function ensureReadyAccount() {
   console.log("[DOMO] Tidak ada akun ready, auto-register...");
   const reg = await registerOneAccount();
   if (!reg.success) throw new Error("Auto-register gagal");
-  const accounts2 = await loadAccounts();
-  return accounts2[accounts2.length - 1];
+  
+  // Langsung gunakan akun baru dari memori
+  return reg.account; 
 }
 
 async function generateFull({ mode = "t2i", images, prompt, modelVersion, modelName, resolution = CONFIG.DEFAULT_RESOLUTION, aspectRatio, removeWatermark = CONFIG.REMOVE_WM_DEFAULT, wmMode = CONFIG.WM_MODE }) {
