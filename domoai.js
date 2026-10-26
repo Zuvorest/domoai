@@ -1,12 +1,8 @@
-// domoai.js
-// Full pipeline: auto register + generate (T2I/I2I) + auto rotate + remove watermark
-
 import axios from "axios";
 import https from "https";
 import FormData from "form-data";
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
+import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
 // KONFIGURASI
@@ -14,15 +10,12 @@ import path from "path";
 const CONFIG = {
   BASE_URL: "https://www.domoai.app",
   API_URL: "https://api.domoai.app",
-  ACCOUNTS_FILE: "./gemini-accounts.json",
-  OUTPUT_DIR: "./output",
   OTP_TIMEOUT_MS: 90000,
   POLL_INTERVAL_MS: 4000,
   POLL_MAX_ATTEMPTS: 90,
   COS_REGION: "na-siliconvalley",
   CREDITS_PER_GENERATE: 10,
   INITIAL_CREDITS: 30,
-  MIN_READY_ACCOUNTS: 1,
   REMOVE_WM_DEFAULT: true,
   WM_MODE: "wm",
   MODEL_VERSION_FLARE: 22005,
@@ -45,6 +38,13 @@ const SpoofHead = (extra = {}) => {
     ...extra,
   };
 };
+
+// ============================================================
+// SETUP SUPABASE
+// ============================================================
+const supabaseUrl = process.env.SUPABASE_URL || "https://xxxxxx.supabase.co";
+const supabaseKey = process.env.SUPABASE_KEY || "eyJhbGciOi...";
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ============================================================
 // TEMPMAIL
@@ -227,17 +227,11 @@ class DomoAIClient {
       const res = await axios.get(imageInput, { responseType: "arraybuffer" });
       return { buffer: Buffer.from(res.data), contentType: res.headers["content-type"] || "image/jpeg" };
     }
-    if (typeof imageInput === "string" && fs.existsSync(imageInput)) {
-      const buffer = fs.readFileSync(imageInput);
-      const ext = imageInput.split(".").pop().toLowerCase();
-      const ct = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-      return { buffer, contentType: ct };
-    }
     if (typeof imageInput === "string" && imageInput.length > 100) {
       const b64 = imageInput.includes(";base64,") ? imageInput.split(";base64,")[1] : imageInput;
       return { buffer: Buffer.from(b64, "base64"), contentType: "image/jpeg" };
     }
-    throw new Error("Format gambar tidak valid");
+    throw new Error("Format gambar tidak valid (harus URL atau base64)");
   }
 
   async _uploadSingle(imageInput) {
@@ -334,7 +328,7 @@ class DomoAIClient {
 }
 
 // ============================================================
-// LIGHTPDF
+// LIGHTPDF (REMOVE WATERMARK)
 // ============================================================
 class LightPdf {
   constructor() {
@@ -429,15 +423,53 @@ class LightPdf {
 }
 
 // ============================================================
-// STORAGE & FUNGSI UTAMA
+// STORAGE & FUNGSI UTAMA (SUPABASE)
 // ============================================================
-function loadAccounts() {
-  if (!fs.existsSync(CONFIG.ACCOUNTS_FILE)) return [];
-  try { return JSON.parse(fs.readFileSync(CONFIG.ACCOUNTS_FILE, "utf-8")); } catch { return []; }
+async function loadAccounts() {
+  try {
+    const { data, error } = await supabase.from('domoai_accounts').select('*');
+    if (error) throw error;
+    
+    // Map dari snake_case database ke camelCase JavaScript
+    return data.map(row => ({
+      email: row.email,
+      password: row.password,
+      username: row.username,
+      userId: row.user_id,
+      state: row.state,
+      usageCount: row.usage_count,
+      lastKnownCredits: row.last_known_credits,
+      createdAt: row.created_at
+    }));
+  } catch (e) {
+    console.error("[DB] Gagal load akun:", e.message);
+    return [];
+  }
 }
 
-function saveAccounts(accounts) {
-  fs.writeFileSync(CONFIG.ACCOUNTS_FILE, JSON.stringify(accounts, null, 2));
+async function saveAccounts(accounts) {
+  try {
+    // Hapus semua data lama
+    await supabase.from('domoai_accounts').delete().neq('email', 'dummy_value_to_delete_all');
+    
+    // Insert data baru
+    if (accounts.length > 0) {
+      const insertData = accounts.map(a => ({
+        email: a.email,
+        password: a.password,
+        username: a.username,
+        user_id: a.userId,
+        state: a.state,
+        usage_count: a.usageCount,
+        last_known_credits: a.lastKnownCredits,
+        created_at: a.createdAt || new Date().toISOString()
+      }));
+      const { error } = await supabase.from('domoai_accounts').insert(insertData);
+      if (error) throw error;
+    }
+  } catch (e) {
+    console.error("[DB] Gagal simpan akun:", e.message);
+  }
 }
 
 async function registerOneAccount() {
@@ -457,15 +489,25 @@ async function registerOneAccount() {
   let credits = CONFIG.INITIAL_CREDITS;
   try { credits = await domo.getCredits(); } catch {}
 
-  const accounts = loadAccounts();
-  accounts.push({ email, password, username: domo.username, userId: domo.userId, state: domo.encodeState(), usageCount: 0, lastKnownCredits: credits, createdAt: new Date().toISOString() });
-  saveAccounts(accounts);
-  console.log(`[DOMO] ✅ Akun tersimpan. Total: ${accounts.length}\n`);
+  const accounts = await loadAccounts();
+  accounts.push({ 
+    email, 
+    password, 
+    username: domo.username, 
+    userId: domo.userId, 
+    state: domo.encodeState(), 
+    usageCount: 0, 
+    lastKnownCredits: credits, 
+    createdAt: new Date().toISOString() 
+  });
+  
+  await saveAccounts(accounts);
+  console.log(`[DOMO] ✅ Akun tersimpan di DB. Total: ${accounts.length}\n`);
   return { success: true, email, username: domo.username, credits };
 }
 
 async function ensureReadyAccount() {
-  const accounts = loadAccounts();
+  const accounts = await loadAccounts();
   for (const acc of accounts) {
     const domo = new DomoAIClient();
     domo.decodeState(acc.state);
@@ -473,15 +515,22 @@ async function ensureReadyAccount() {
     try {
       const credits = await domo.getCredits();
       if (credits >= CONFIG.CREDITS_PER_GENERATE) return acc;
-      else saveAccounts(loadAccounts().filter((a) => a.email !== acc.email));
+      else {
+        const filtered = accounts.filter((a) => a.email !== acc.email);
+        await saveAccounts(filtered);
+      }
     } catch (e) {
-      if ([401, 403].includes(e.response?.status)) saveAccounts(loadAccounts().filter((a) => a.email !== acc.email));
+      if ([401, 403].includes(e.response?.status)) {
+        const filtered = accounts.filter((a) => a.email !== acc.email);
+        await saveAccounts(filtered);
+      }
     }
   }
+  
   console.log("[DOMO] Tidak ada akun ready, auto-register...");
   const reg = await registerOneAccount();
   if (!reg.success) throw new Error("Auto-register gagal");
-  const accounts2 = loadAccounts();
+  const accounts2 = await loadAccounts();
   return accounts2[accounts2.length - 1];
 }
 
@@ -502,13 +551,13 @@ async function generateFull({ mode = "t2i", images, prompt, modelVersion, modelN
     result = await domo.txt2img({ prompt, modelVersion, mode: CONFIG.DEFAULT_MODE, resolution, aspectRatio });
   }
 
-  const accounts = loadAccounts();
+  const accounts = await loadAccounts();
   const idx = accounts.findIndex((a) => a.email === acc.email);
   if (idx !== -1) {
     accounts[idx].usageCount = (accounts[idx].usageCount || 0) + 1;
     accounts[idx].lastUsedAt = new Date().toISOString();
     try { accounts[idx].lastKnownCredits = await domo.getCredits(); } catch {}
-    saveAccounts(accounts);
+    await saveAccounts(accounts);
   }
 
   const rawImages = result.images || [];
@@ -543,6 +592,5 @@ async function generateFull({ mode = "t2i", images, prompt, modelVersion, modelN
   };
 }
 
-// ==== EXPORT UNTUK APP.JS ====
 export { DomoAIClient, LightPdf, TempMail, registerOneAccount, ensureReadyAccount, generateFull, loadAccounts, saveAccounts, CONFIG };
 export default { generateFull, registerOneAccount, LightPdf };
