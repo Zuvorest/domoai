@@ -42,14 +42,9 @@ const SpoofHead = (extra = {}) => {
 // ============================================================
 // SETUP SUPABASE
 // ============================================================
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-
-if (!supabaseUrl || !supabaseKey) {
-  console.warn("⚠️ Peringatan: SUPABASE_URL atau SUPABASE_KEY belum diisi di Environment Variables!");
-}
-
-const supabase = createClient(supabaseUrl || "https://dummy.supabase.co", supabaseKey || "dummy_key");
+const supabaseUrl = process.env.SUPABASE_URL || "https://dummy.supabase.co";
+const supabaseKey = process.env.SUPABASE_KEY || "dummy_key";
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ============================================================
 // TEMPMAIL
@@ -434,16 +429,10 @@ async function loadAccounts() {
   try {
     const { data, error } = await supabase.from('domoai_accounts').select('*');
     if (error) throw error;
-    
     return data.map(row => ({
-      email: row.email,
-      password: row.password,
-      username: row.username,
-      userId: row.user_id,
-      state: row.state,
-      usageCount: row.usage_count,
-      lastKnownCredits: row.last_known_credits,
-      createdAt: row.created_at
+      email: row.email, password: row.password, username: row.username,
+      userId: row.user_id, state: row.state, usageCount: row.usage_count,
+      lastKnownCredits: row.last_known_credits, createdAt: row.created_at
     }));
   } catch (e) {
     console.error("[DB] Gagal load akun:", e.message);
@@ -454,17 +443,11 @@ async function loadAccounts() {
 async function saveAccounts(accounts) {
   try {
     await supabase.from('domoai_accounts').delete().neq('email', 'dummy_value_to_delete_all');
-    
     if (accounts.length > 0) {
       const insertData = accounts.map(a => ({
-        email: a.email,
-        password: a.password,
-        username: a.username,
-        user_id: a.userId,
-        state: a.state,
-        usage_count: a.usageCount,
-        last_known_credits: a.lastKnownCredits,
-        created_at: a.createdAt || new Date().toISOString()
+        email: a.email, password: a.password, username: a.username,
+        user_id: a.userId, state: a.state, usage_count: a.usageCount,
+        last_known_credits: a.lastKnownCredits, created_at: a.createdAt || new Date().toISOString()
       }));
       const { error } = await supabase.from('domoai_accounts').insert(insertData);
       if (error) throw error;
@@ -492,13 +475,8 @@ async function registerOneAccount() {
   try { credits = await domo.getCredits(); } catch {}
 
   const newAcc = { 
-    email, 
-    password, 
-    username: domo.username, 
-    userId: domo.userId, 
-    state: domo.encodeState(), 
-    usageCount: 0, 
-    lastKnownCredits: credits, 
+    email, password, username: domo.username, userId: domo.userId, 
+    state: domo.encodeState(), usageCount: 0, lastKnownCredits: credits, 
     createdAt: new Date().toISOString() 
   };
 
@@ -544,11 +522,9 @@ async function ensureReadyAccount() {
 }
 
 async function generateFull({ 
-  mode = "t2i", 
-  images, 
-  prompt, 
-  modelVersion = CONFIG.MODEL_VERSION_NANO_BANANA, // Default 22006
-  modelName = "Nano Banana 2.1",                    // Default nama
+  mode = "t2i", images, prompt, 
+  modelVersion = CONFIG.MODEL_VERSION_NANO_BANANA, 
+  modelName = "Nano Banana 2.1", 
   resolution = CONFIG.DEFAULT_RESOLUTION, 
   aspectRatio, 
   removeWatermark = CONFIG.REMOVE_WM_DEFAULT, 
@@ -597,16 +573,9 @@ async function generateFull({
   }
 
   return {
-    status: true,
-    account: acc.email,
-    mode,
-    modelName,
-    modelVersion,
-    inputCount: result.inputCount,
-    postId: result.postId,
-    remainingCredits: accounts[idx]?.lastKnownCredits,
-    rawImages,
-    images: cleanedImages,
+    status: true, account: acc.email, mode, modelName, modelVersion,
+    inputCount: result.inputCount, postId: result.postId,
+    remainingCredits: accounts[idx]?.lastKnownCredits, rawImages, images: cleanedImages,
     watermarkRemoved: removeWatermark,
   };
 }

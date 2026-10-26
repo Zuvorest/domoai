@@ -1,7 +1,7 @@
 {
   "name": "domoai-api",
   "version": "1.0.0",
-  "description": "DomoAI API wrapper with Supabase support",
+  "description": "DomoAI API Async Wrapper",
   "type": "module",
   "main": "app.js",
   "scripts": {
